@@ -1,0 +1,18 @@
+preset_mode: false
+settings:
+  drafts_per_combination: 1
+jobs:
+  - style: studio_clean
+    character: product_designer
+    outfit: smart_casual
+    camera: front_view
+    pose: standing_confident
+    expression: confident
+    background: clean_backdrop
+  - style: cinematic
+    character: android_host
+    outfit: studio_uniform
+    camera: three_quarter
+    pose: presenting
+    expression: focused
+    background: gallery_space

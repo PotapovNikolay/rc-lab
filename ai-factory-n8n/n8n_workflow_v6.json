@@ -1,0 +1,200 @@
+{
+  "name": "AI Factory v6",
+  "pinData": {},
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "",
+  "meta": { "instanceId": "ai-factory-v6" },
+  "tags": [],
+  "nodes": [
+    {
+      "id": "start-node",
+      "name": "▶️ START",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-2400, 0],
+      "parameters": {}
+    },
+    {
+      "id": "config-node",
+      "name": "⚙️ CONFIG",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [-2200, 0],
+      "parameters": {
+        "values": {
+          "string": [
+            { "name": "root_path", "value": "../ai-factory-n8n" },
+            { "name": "comfy_api", "value": "http://127.0.0.1:8188" },
+            { "name": "comfy_path", "value": "../ComfyUI" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "read-library-node",
+      "name": "📂 Read Library",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-2000, 0],
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════════════════════════════════\n// 📂 Read Library - AI Factory v6\n// ═══════════════════════════════════════════════════════════════════\n\nconst fs = require('fs');\nconst path = require('path');\n\nconst root = $('⚙️ CONFIG').first().json.root_path;\n\nfunction parseYamlV6(content) {\n  const lines = content.split(/\\r?\\n/);\n  const result = {};\n  \n  let i = 0;\n  while (i < lines.length) {\n    const line = lines[i];\n    const trimmed = line.trim();\n    if (!trimmed || trimmed.startsWith('#')) { i++; continue; }\n    \n    const indent = line.search(/\\S/);\n    \n    if (indent === 0 && trimmed.endsWith(':') && !trimmed.includes(' ')) {\n      const topKey = trimmed.slice(0, -1);\n      if (topKey.startsWith('_')) { i++; continue; }\n      \n      i++;\n      const obj = parseBlock(lines, i, 2);\n      result[topKey] = obj.value;\n      i = obj.nextLine;\n      continue;\n    }\n    i++;\n  }\n  return result;\n}\n\nfunction parseBlock(lines, startLine, baseIndent) {\n  const obj = {};\n  let i = startLine;\n  while (i < lines.length) {\n    const line = lines[i];\n    const trimmed = line.trim();\n    if (!trimmed || trimmed.startsWith('#')) { i++; continue; }\n    \n    const indent = line.search(/\\S/);\n    if (indent < baseIndent) break;\n    if (indent > baseIndent) { i++; continue; }\n    \n    if (trimmed.includes(':')) {\n      const colonIdx = trimmed.indexOf(':');\n      const key = trimmed.slice(0, colonIdx).trim();\n      const rawVal = trimmed.slice(colonIdx + 1).trim();\n      \n      if (key === 'loras' && (rawVal === '' || rawVal === null)) {\n        const arr = parseLoras(lines, i + 1, baseIndent + 2);\n        obj.loras = arr.value;\n        i = arr.nextLine;\n        continue;\n      }\n      \n      if (rawVal === '' || rawVal === null) {\n        i++;\n        const nested = parseBlock(lines, i, baseIndent + 2);\n        obj[key] = nested.value;\n        i = nested.nextLine;\n        continue;\n      }\n      \n      obj[key] = parseValue(rawVal);\n      i++;\n      continue;\n    }\n    i++;\n  }\n  return { value: obj, nextLine: i };\n}\n\nfunction parseLoras(lines, startLine, baseIndent) {\n  const arr = [];\n  let i = startLine;\n  while (i < lines.length) {\n    const line = lines[i];\n    const trimmed = line.trim();\n    if (!trimmed || trimmed.startsWith('#')) { i++; continue; }\n    const indent = line.search(/\\S/);\n    if (indent < baseIndent) break;\n    \n    if (trimmed.startsWith('- file:')) {\n      const lora = { file: parseValue(trimmed.split(':').slice(1).join(':').trim()) };\n      i++;\n      while (i < lines.length) {\n        const subLine = lines[i];\n        const subTrimmed = subLine.trim();\n        if (!subTrimmed || subTrimmed.startsWith('#')) { i++; continue; }\n        const subIndent = subLine.search(/\\S/);\n        if (subIndent <= baseIndent || subTrimmed.startsWith('- ')) break;\n        if (subTrimmed.includes(':')) {\n          const cIdx = subTrimmed.indexOf(':');\n          const k = subTrimmed.slice(0, cIdx).trim();\n          const v = subTrimmed.slice(cIdx + 1).trim();\n          lora[k] = parseValue(v);\n        }\n        i++;\n      }\n      arr.push(lora);\n      continue;\n    }\n    i++;\n  }\n  return { value: arr, nextLine: i };\n}\n\nfunction parseValue(val) {\n  if (val === undefined || val === null) return null;\n  val = String(val).trim().replace(/^\"|\"$/g, '').replace(/^'|'$/g, '');\n  if (val === '' || val === 'null') return null;\n  if (val === 'true') return true;\n  if (val === 'false') return false;\n  if (!isNaN(parseFloat(val)) && !val.includes(' ') && !val.includes(',')) return parseFloat(val);\n  return val;\n}\n\nfunction readLibraryFolder(folderPath) {\n  const combined = {};\n  if (!fs.existsSync(folderPath)) return combined;\n  const entries = fs.readdirSync(folderPath, { withFileTypes: true });\n  entries.forEach(entry => {\n    const fullPath = path.join(folderPath, entry.name);\n    if (entry.isDirectory()) {\n      Object.assign(combined, readLibraryFolder(fullPath));\n    } else if (entry.name.endsWith('.yaml')) {\n      const content = fs.readFileSync(fullPath, 'utf8');\n      const parsed = parseYamlV6(content);\n      Object.assign(combined, parsed);\n    }\n  });\n  return combined;\n}\n\nconst baseModelPath = path.join(root, 'library', 'base_model.yaml');\nconst baseModelContent = fs.readFileSync(baseModelPath, 'utf8');\n\nlet checkpoint = 'illustriousXL.safetensors';\nlet settings = { width: 832, height: 1216, steps: 28, cfg: 4, clip_skip: 2, sampler: 'euler_ancestral', scheduler: 'normal' };\nlet qualityPositive = '';\nlet qualityNegative = '';\n\nconst checkpointMatch = baseModelContent.match(/^checkpoint:\\s*[\"']?([^\"'\\n]+)[\"']?/m);\nif (checkpointMatch) checkpoint = checkpointMatch[1].trim();\n['width', 'height', 'steps', 'cfg', 'clip_skip'].forEach(key => {\n  const match = baseModelContent.match(new RegExp('^\\\\s+' + key + ':\\\\s*([\\\\d.]+)', 'm'));\n  if (match) settings[key] = parseFloat(match[1]);\n});\nconst samplerMatch = baseModelContent.match(/^\\s+sampler:\\s*[\"']?([^\"'\\n]+)[\"']?/m);\nif (samplerMatch) settings.sampler = samplerMatch[1].trim();\nconst schedulerMatch = baseModelContent.match(/^\\s+scheduler:\\s*[\"']?([^\"'\\n]+)[\"']?/m);\nif (schedulerMatch) settings.scheduler = schedulerMatch[1].trim();\n\nconst posMatch = baseModelContent.match(/^positive:\\s*[\"']?([^\"'\\n]+)[\"']?/m);\nif (posMatch) qualityPositive = posMatch[1].trim();\nconst negMatch = baseModelContent.match(/^negative:\\s*[\"']?([^\"'\\n]+)[\"']?/m);\nif (negMatch) qualityNegative = negMatch[1].trim();\n\nconst library = {\n  styles: readLibraryFolder(path.join(root, 'library', 'styles')),\n  cameras: readLibraryFolder(path.join(root, 'library', 'cameras')),\n  characters: readLibraryFolder(path.join(root, 'library', 'characters')),\n  outfits: readLibraryFolder(path.join(root, 'library', 'outfits')),\n  poses: readLibraryFolder(path.join(root, 'library', 'poses')),\n  expressions: readLibraryFolder(path.join(root, 'library', 'expressions')),\n  backgrounds: readLibraryFolder(path.join(root, 'library', 'backgrounds'))\n};\n\nconst jobPath = path.join(root, 'queue', 'job.yaml');\nconst jobContent = fs.readFileSync(jobPath, 'utf8');\n\nlet presetMode = false;\nlet presetFile = '';\nlet draftsPerCombination = 2;\nlet jobs = [];\n\nconst presetModeMatch = jobContent.match(/^preset_mode:\\s*(true|false)/m);\nif (presetModeMatch) presetMode = presetModeMatch[1] === 'true';\n\nconst presetFileMatch = jobContent.match(/^preset_file:\\s*[\"']?([^\"'\\n]+)[\"']?/m);\nif (presetFileMatch) presetFile = presetFileMatch[1].trim();\n\nconst draftsMatch = jobContent.match(/drafts_per_combination:\\s*(\\d+)/m);\nif (draftsMatch) draftsPerCombination = parseInt(draftsMatch[1]);\n\nfunction parseArrayOrValue(str) {\n  if (!str) return [null];\n  str = String(str).trim();\n  if (str.startsWith('[')) {\n    return str.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);\n  }\n  return [str];\n}\n\nfunction cartesian(arrays) {\n  return arrays.reduce((acc, arr) => acc.flatMap(x => arr.map(y => [...x, y])), [[]]);\n}\n\nif (!presetMode) {\n  const jobsSection = jobContent.split('jobs:')[1];\n  if (jobsSection) {\n    let currentJob = null;\n    let rawJobs = [];\n    jobsSection.split(/\\r?\\n/).forEach(line => {\n      const trimmed = line.trim();\n      if (trimmed.startsWith('#')) return;\n      if (trimmed.startsWith('- ') && trimmed.includes(':')) {\n        if (currentJob) rawJobs.push(currentJob);\n        currentJob = {};\n        const rest = trimmed.slice(2);\n        const colonIdx = rest.indexOf(':');\n        const key = rest.slice(0, colonIdx).trim();\n        const val = rest.slice(colonIdx + 1).trim();\n        currentJob[key] = val;\n      } else if (currentJob && trimmed.includes(':') && !trimmed.startsWith('#')) {\n        const colonIdx = trimmed.indexOf(':');\n        const key = trimmed.slice(0, colonIdx).trim();\n        const val = trimmed.slice(colonIdx + 1).trim();\n        currentJob[key] = val;\n      }\n    });\n    if (currentJob) rawJobs.push(currentJob);\n    \n    const jobKeys = ['style', 'camera', 'outfit', 'pose', 'expression', 'background'];\n    rawJobs.forEach(rawJob => {\n      const arrays = {};\n      arrays.character = parseArrayOrValue(rawJob.character);\n      jobKeys.forEach(key => { arrays[key] = parseArrayOrValue(rawJob[key]); });\n      const allKeys = ['character', ...jobKeys];\n      const allArrays = allKeys.map(k => arrays[k]);\n      const combinations = cartesian(allArrays);\n      combinations.forEach(combo => {\n        const job = {};\n        allKeys.forEach((key, i) => { job[key] = combo[i]; });\n        jobs.push(job);\n      });\n    });\n  }\n}\n\nif (presetMode && presetFile) {\n  const presetPath = path.join(root, 'presets', presetFile);\n  const presetContent = fs.readFileSync(presetPath, 'utf8');\n  const fixed = {};\n  const fixedSection = presetContent.match(/fixed:[\\s\\S]*?(?=variants:|settings:|$)/);\n  if (fixedSection) {\n    fixedSection[0].split(/\\r?\\n/).forEach(line => {\n      if (line.includes(':') && !line.trim().startsWith('#') && line.trim() !== 'fixed:') {\n        const [key, ...val] = line.trim().split(':');\n        fixed[key.trim()] = val.join(':').trim();\n      }\n    });\n  }\n  const variants = {};\n  const variantsSection = presetContent.match(/variants:[\\s\\S]*?(?=settings:|$)/);\n  if (variantsSection) {\n    variantsSection[0].split(/\\r?\\n/).forEach(line => {\n      const trimmed = line.trim();\n      if (trimmed.includes(':') && !trimmed.startsWith('#') && trimmed !== 'variants:') {\n        const colonIdx = trimmed.indexOf(':');\n        const key = trimmed.slice(0, colonIdx).trim();\n        const val = trimmed.slice(colonIdx + 1).trim();\n        if (val.startsWith('[')) {\n          variants[key] = val.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);\n        }\n      }\n    });\n  }\n  const settingsMatch = presetContent.match(/drafts_per_combination:\\s*(\\d+)/);\n  if (settingsMatch) draftsPerCombination = parseInt(settingsMatch[1]);\n  const keys = Object.keys(variants);\n  const variantArrays = keys.map(k => variants[k].length > 0 ? variants[k] : [null]);\n  const combinations = cartesian(variantArrays);\n  combinations.forEach(combo => {\n    const job = { ...fixed };\n    keys.forEach((key, i) => {\n      if (combo[i]) {\n        let singularKey = key;\n        if (key === 'cameras') singularKey = 'camera';\n        else if (key.endsWith('s')) singularKey = key.slice(0, -1);\n        job[singularKey] = combo[i];\n      }\n    });\n    jobs.push(job);\n  });\n}\n\nreturn {\n  json: {\n    checkpoint, settings, quality_positive: qualityPositive, quality_negative: qualityNegative, library, jobs, drafts_per_combination: draftsPerCombination\n  }\n};"
+      }
+    },
+    {
+      "id": "flatten-node",
+      "name": "🎯 Flatten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1800, 0],
+      "parameters": {
+        "jsCode": "// 🎯 FLATTEN TASKS\nconst data = $input.first().json;\nconst allTasks = [];\nlet taskIndex = 0;\n\nfor (const job of data.jobs) {\n  for (let draft = 1; draft <= data.drafts_per_combination; draft++) {\n    taskIndex++;\n    const style = data.library.styles[job.style] || {};\n    const camera = data.library.cameras[job.camera] || {};\n    const character = data.library.characters[job.character] || {};\n    const pose = data.library.poses[job.pose] || {};\n    const expression = data.library.expressions[job.expression] || {};\n    const background = data.library.backgrounds[job.background] || {};\n    let outfit = {};\n    let outfitId = job.outfit || 'default';\n    if (outfitId === 'default' || outfitId === null) {\n      outfit = character.default_outfit || {};\n      outfitId = 'default';\n    } else if (outfitId === 'none') {\n      outfit = {};\n      outfitId = 'none';\n    } else {\n      outfit = data.library.outfits[outfitId] || {};\n    }\n    allTasks.push({\n      json: {\n        task_index: taskIndex,\n        total_tasks: 0,\n        draft_index: draft,\n        seed: Math.floor(Math.random() * 10000000000),\n        checkpoint: data.checkpoint,\n        settings: data.settings,\n        quality_positive: data.quality_positive,\n        quality_negative: data.quality_negative,\n        ids: {\n          style: job.style || 'default',\n          character: job.character || 'unknown',\n          camera: job.camera || 'front',\n          outfit: outfitId,\n          pose: job.pose || 'standing',\n          expression: job.expression || 'neutral',\n          background: job.background || 'simple'\n        },\n        data: { style, camera, character, outfit, pose, expression, background }\n      }\n    });\n  }\n}\nallTasks.forEach(t => t.json.total_tasks = allTasks.length);\nreturn allTasks;"
+      }
+    },
+    {
+      "id": "loop-node",
+      "name": "🔄 Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [-1600, 0],
+      "parameters": { "options": {} }
+    },
+    {
+      "id": "build-prompt-node",
+      "name": "🎨 Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1400, 0],
+      "parameters": {
+        "jsCode": "const task = $input.first().json;\nconst d = task.data;\nconst positiveParts = [];\nconst negativeParts = [];\nconst loraStack = [];\n\nfunction addPositive(text) { if (text && text !== 'null') positiveParts.push(String(text).trim()); }\nfunction addNegative(text) { if (text && text !== 'null') negativeParts.push(String(text).trim()); }\nfunction addLora(file, strength, type) {\n  if (!file) return;\n  loraStack.push({ name: file.replace('.safetensors', ''), file, strength: strength || 0.7, type });\n}\nfunction addComponentLora(component, type) {\n  if (component && component.lora && component.lora.file) addLora(component.lora.file, component.lora.strength, type);\n}\n\naddPositive(task.quality_positive);\naddNegative(task.quality_negative);\n\nif (d.style) {\n  if (d.style.loras) d.style.loras.forEach(l => { if (l.file) { addLora(l.file, l.strength, 'style'); addPositive(l.positive); addNegative(l.negative); } });\n  if (d.style.body) { addPositive(d.style.body.positive); addNegative(d.style.body.negative); if (d.style.body.lora) addLora(d.style.body.lora.file, d.style.body.lora.strength, 'body'); }\n  addPositive(d.style.positive); addNegative(d.style.negative);\n}\n\nif (d.camera) { addPositive(d.camera.positive); addNegative(d.camera.negative); addComponentLora(d.camera, 'camera'); }\nif (d.character) {\n  if (d.character.lora) addLora(d.character.lora.file, d.character.lora.strength, 'character');\n  if (d.character.positive) addPositive(`(${d.character.positive})`);\n  addNegative(d.character.negative);\n  if (d.character.appearance) { addPositive(d.character.appearance.positive); addNegative(d.character.appearance.negative); }\n}\nif (d.outfit) { addPositive(d.outfit.positive); addNegative(d.outfit.negative); addComponentLora(d.outfit, 'outfit'); }\nif (d.pose) { addPositive(d.pose.positive); addNegative(d.pose.negative); addComponentLora(d.pose, 'pose'); }\nif (d.expression) { addPositive(d.expression.positive); addNegative(d.expression.negative); addComponentLora(d.expression, 'expression'); }\nif (d.background) { addPositive(d.background.positive); addNegative(d.background.negative); addComponentLora(d.background, 'background'); }\n\nconst finalPos = positiveParts.filter(Boolean).join(', ');\nreturn {\n  json: { ...task, final_positive: finalPos, final_negative: negativeParts.filter(Boolean).join(', '), lora_stack: loraStack }\n};"
+      }
+    },
+    {
+      "id": "build-comfyui-node",
+      "name": "🔧 Build ComfyUI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1200, 0],
+      "parameters": {
+        "jsCode": "const task = $input.first().json;\nconst s = task.settings || {};\nconst uid = task.seed.toString().slice(-4);\nfunction fix(n) { return n && (n.endsWith('.safetensors') ? n : n + '.safetensors'); }\nconst workflow = {};\nconst ckptId = uid + '_ckpt';\nworkflow[ckptId] = { 'class_type': 'CheckpointLoaderSimple', 'inputs': { 'ckpt_name': fix(task.checkpoint) } };\nlet lastM = [ckptId, 0], lastC = [ckptId, 1], count = 1;\n(task.lora_stack || []).forEach(l => {\n  const id = uid + '_lora' + (count++);\n  workflow[id] = { 'class_type': 'LoraLoader', 'inputs': { 'lora_name': fix(l.name), 'strength_model': l.strength || 1, 'strength_clip': l.strength || 1, 'model': lastM, 'clip': lastC } };\n  lastM = [id, 0]; lastC = [id, 1];\n});\nconst csId = uid + '_clip';\nworkflow[csId] = { 'class_type': 'CLIPSetLastLayer', 'inputs': { 'stop_at_clip_layer': -(s.clip_skip || 2), 'clip': lastC } };\nconst posId = uid + '_pos', negId = uid + '_neg';\nworkflow[posId] = { 'class_type': 'CLIPTextEncode', 'inputs': { 'text': task.final_positive, 'clip': [csId, 0] } };\nworkflow[negId] = { 'class_type': 'CLIPTextEncode', 'inputs': { 'text': task.final_negative, 'clip': [csId, 0] } };\nconst latId = uid + '_lat';\nworkflow[latId] = { 'class_type': 'EmptyLatentImage', 'inputs': { 'width': s.width || 832, 'height': s.height || 1216, 'batch_size': 1 } };\nconst samId = uid + '_sam';\nworkflow[samId] = { 'class_type': 'KSampler', 'inputs': { 'seed': task.seed, 'steps': s.steps || 25, 'cfg': s.cfg || 5, 'sampler_name': s.sampler || 'euler', 'scheduler': s.scheduler || 'normal', 'denoise': 1, 'model': lastM, 'positive': [posId, 0], 'negative': [negId, 0], 'latent_image': [latId, 0] } };\nconst vaeId = uid + '_vae';\nworkflow[vaeId] = { 'class_type': 'VAEDecode', 'inputs': { 'samples': [samId, 0], 'vae': [ckptId, 2] } };\nconst savId = uid + '_sav';\nworkflow[savId] = { 'class_type': 'SaveImage', 'inputs': { 'filename_prefix': 'AIFactory_', 'images': [vaeId, 0] } };\nreturn { json: { prompt: workflow, task } };"
+      }
+    },
+    {
+      "id": "clear-cache-node",
+      "name": "🧹 Clear Cache",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-1000, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('⚙️ CONFIG').item.json.comfy_api }}/free",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "unload_models", "value": "false" },
+            { "name": "free_memory", "value": "true" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "comfyui-node",
+      "name": "🚀 ComfyUI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [-800, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('⚙️ CONFIG').item.json.comfy_api }}/prompt",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ prompt: $('🔧 Build ComfyUI').item.json.prompt }) }}",
+        "options": { "timeout": 300000 }
+      }
+    },
+    {
+      "id": "wait-node",
+      "name": "⏳ Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [-600, 0],
+      "webhookId": "wait",
+      "parameters": { "amount": 8 }
+    },
+    {
+      "id": "status-node",
+      "name": "📡 Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-400, 0],
+      "parameters": {
+        "url": "={{ $('⚙️ CONFIG').item.json.comfy_api }}/history/{{ $('🚀 ComfyUI').item.json.prompt_id }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "ready-node",
+      "name": "Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-200, 0],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ready",
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "outputs",
+              "operator": { "type": "string", "operation": "contains" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "save-node",
+      "name": "💾 Save",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, -100],
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst config = $('⚙️ CONFIG').first().json;\nconst task = $('🔧 Build ComfyUI').first().json.task;\nconst history = $input.first().json;\nconst promptId = Object.keys(history)[0];\nconst outputs = history[promptId]?.outputs || {};\nlet image = null;\nfor (const key in outputs) { if (outputs[key].images) { image = outputs[key].images[0]; break; } }\nif (!image) throw new Error('No image');\nconst sourceFile = path.join(config.comfy_path, 'output', image.subfolder || '', image.filename);\nconst clean = s => (s || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30);\nconst outDir = path.join(config.root_path, 'output', clean(task.ids.style), clean(task.ids.character));\nif (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });\nconst filename = [String(task.task_index).padStart(3, '0'), clean(task.ids.pose), clean(task.ids.camera), clean(task.ids.outfit), task.seed].join('_');\nfs.copyFileSync(sourceFile, path.join(outDir, filename + '.png'));\n\nfunction yamlStr(val, indent = '') {\n  if (val === null || val === undefined) return 'null';\n  if (Array.isArray(val)) return '\\n' + val.map(v => `${indent}  - ${yamlStr(v, indent + '  ')}`).join('\\n');\n  if (typeof val === 'object') return '\\n' + Object.keys(val).map(k => `${indent}  ${k}: ${yamlStr(val[k], indent + '  ')}`).join('\\n');\n  return String(val);\n}\n\nconst yamlContent = `# AI Factory v6\\ngenerated: \"${new Date().toISOString()}\"\\nseed: ${task.seed}\\nids: ${yamlStr(task.ids)}\\nprompt:\\n  positive: \"${task.final_positive}\"\\n  negative: \"${task.final_negative}\"\\nsource_data: ${yamlStr(task.data)}`;\nfs.writeFileSync(path.join(outDir, filename + '.yaml'), yamlContent);\nreturn { json: { success: true, file: filename } };"
+      }
+    },
+    {
+      "id": "cooldown-node",
+      "name": "⏳ Cooldown",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [200, 0],
+      "webhookId": "cooldown",
+      "parameters": { "amount": 5 }
+    }
+  ],
+  "connections": {
+    "▶️ START": { "main": [[{ "node": "⚙️ CONFIG", "type": "main", "index": 0 }]] },
+    "⚙️ CONFIG": { "main": [[{ "node": "📂 Read Library", "type": "main", "index": 0 }]] },
+    "📂 Read Library": { "main": [[{ "node": "🎯 Flatten", "type": "main", "index": 0 }]] },
+    "🎯 Flatten": { "main": [[{ "node": "🔄 Loop", "type": "main", "index": 0 }]] },
+    "🔄 Loop": { "main": [[], [{ "node": "🎨 Build Prompt", "type": "main", "index": 0 }]] },
+    "🎨 Build Prompt": { "main": [[{ "node": "🔧 Build ComfyUI", "type": "main", "index": 0 }]] },
+    "🔧 Build ComfyUI": { "main": [[{ "node": "🧹 Clear Cache", "type": "main", "index": 0 }]] },
+    "🧹 Clear Cache": { "main": [[{ "node": "🚀 ComfyUI", "type": "main", "index": 0 }]] },
+    "🚀 ComfyUI": { "main": [[{ "node": "⏳ Wait", "type": "main", "index": 0 }]] },
+    "⏳ Wait": { "main": [[{ "node": "📡 Status", "type": "main", "index": 0 }]] },
+    "📡 Status": { "main": [[{ "node": "Ready?", "type": "main", "index": 0 }]] },
+    "Ready?": { "main": [[{ "node": "💾 Save", "type": "main", "index": 0 }], [{ "node": "⏳ Wait", "type": "main", "index": 0 }]] },
+    "💾 Save": { "main": [[{ "node": "⏳ Cooldown", "type": "main", "index": 0 }]] },
+    "⏳ Cooldown": { "main": [[{ "node": "🔄 Loop", "type": "main", "index": 0 }]] }
+  }
+}

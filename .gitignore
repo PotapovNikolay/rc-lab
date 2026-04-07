@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Runtime data
+ai-factory-n8n/output/
+logs/
+*.log
+
+# Editor and OS files
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
+
+# Temporary workspace files
+tmpclaude-*
+docs/tmpclaude-*
