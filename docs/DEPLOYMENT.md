@@ -12,5 +12,5 @@ This repository is prepared for local development first. If you deploy it public
 ## Minimum deployment split
 
 - Host `api-server` on a private VM or container close to ComfyUI
-- Host `ai-factory-ui` separately as a static or server-rendered app
-- Mount `ai-factory-n8n` and ComfyUI output on persistent storage
+- Host the UI separately as a static or server-rendered app
+- Mount the workflow workspace and ComfyUI output on persistent storage
